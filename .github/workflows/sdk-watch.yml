@@ -1,0 +1,78 @@
+# Watch the upstream Muse Gadget SDK for changes and rebuild the
+# image when it moves.
+#
+#   * Daily (and on manual dispatch) the check job resolves upstream
+#     main's HEAD and compares it with the commit pinned in
+#     upstream-sdk.sha.
+#   * If it moved, the build job calls the Docker publish workflow as
+#     a reusable workflow, pinned to the new commit. Calling it
+#     directly is deliberate: a push made with GITHUB_TOKEN does not
+#     trigger other workflows, so "commit the pin and let the push
+#     build" would silently never build.
+#   * Only after a successful build does the record job commit the
+#     new pin, so a failed build is retried on the next run instead
+#     of being recorded as done.
+
+name: SDK watch
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: sdk-watch
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.cmp.outputs.changed }}
+      upstream: ${{ steps.cmp.outputs.upstream }}
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Compare upstream main with the pinned SDK commit
+        id: cmp
+        run: |
+          upstream="$(git ls-remote https://github.com/facebookincubator/muse-gadget-sdk.git main | cut -f1)"
+          pinned="$(tr -d '[:space:]' < upstream-sdk.sha)"
+          echo "upstream=$upstream" >> "$GITHUB_OUTPUT"
+          if [ -n "$upstream" ] && [ "$upstream" != "$pinned" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    uses: ./.github/workflows/docker-publish.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      sdk_ref: ${{ needs.check.outputs.upstream }}
+
+  record:
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Commit the new SDK pin
+        run: |
+          echo "${{ needs.check.outputs.upstream }}" > upstream-sdk.sha
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add upstream-sdk.sha
+          git commit -m "Pin SDK to ${{ needs.check.outputs.upstream }}"
+          git push

@@ -309,6 +309,13 @@ GHCR users: `docker compose pull`, then recreate. The state volume
 `invoke` lines first — a restart interrupts any command Muse is
 currently running.
 
+Upstream SDK changes are tracked automatically: CI builds pin the
+SDK to the commit in `upstream-sdk.sha`, and a daily SDK watch
+workflow compares that pin with upstream `main`. When upstream
+moves, the watch rebuilds and publishes a new image pinned to the
+new commit, then records the pin. The SDK commit inside any
+published image is its `io.musegadget.sdk.ref` label.
+
 ## Swarm / Komodo note
 
 Run this as a single-replica service with the state volume on one node.

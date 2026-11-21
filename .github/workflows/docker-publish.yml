@@ -5,6 +5,11 @@
 #   push of a v* tag -> :<version> + :latest
 #   pull request     -> build only, nothing is published
 #   manual dispatch  -> same as a push to main
+#   workflow call    -> used by the SDK watch with an explicit SDK ref
+#
+# The SDK is built at the commit pinned in upstream-sdk.sha (or the
+# sdk_ref input when given), never at floating main, and the ref used
+# is recorded on the image as the io.musegadget.sdk.ref label.
 #
 # The image contains no SDK token, identity, or pairing (the Dockerfile
 # runs install.sh tokenless and scrubs the state files in the same
@@ -20,6 +25,17 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      sdk_ref:
+        description: "SDK commit to build (default: upstream-sdk.sha)"
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      sdk_ref:
+        description: "SDK commit to build (default: upstream-sdk.sha)"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -31,6 +47,15 @@ jobs:
     steps:
       - name: Check out the repo
         uses: actions/checkout@v4
+
+      - name: Resolve the SDK ref to build
+        id: sdk
+        run: |
+          ref="${{ inputs.sdk_ref }}"
+          if [ -z "$ref" ] && [ -f upstream-sdk.sha ]; then
+            ref="$(tr -d '[:space:]' < upstream-sdk.sha)"
+          fi
+          echo "ref=${ref:-main}" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU (for the arm64 build)
         uses: docker/setup-qemu-action@v3
@@ -60,11 +85,15 @@ jobs:
             type=ref,event=tag
             type=semver,pattern={{version}}
             type=sha
+          labels: |
+            io.musegadget.sdk.ref=${{ steps.sdk.outputs.ref }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
+          build-args: |
+            SDK_REF=${{ steps.sdk.outputs.ref }}
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
