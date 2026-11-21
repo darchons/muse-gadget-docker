@@ -1,0 +1,88 @@
+# Muse Gadget — headless runtime, pairing via the host's BlueZ.
+#
+#   docker compose build
+#   docker compose run --rm gadget info        # creates the device identity
+#   docker compose --profile pair run --rm pair  # pair once, via host BlueZ
+#   docker compose up -d gadget                # steady state
+#
+# The paired state lives in the `gadget-state` volume and is shared by both
+# services. Only ONE of them may run at a time: two live holders of the same
+# identity means two competing link sessions to Muse.
+
+name: muse-gadget
+
+x-common: &common
+  build:
+    context: .
+    args:
+      # Pin to a commit SHA for reproducible builds.
+      SDK_REF: ${SDK_REF:-main}
+  image: muse-gadget:local
+  environment:
+    MUSEGADGET_RUN_AS: gadget
+    # From .env (see .env.example). Written by the entrypoint to the
+    # root-only sdk_token file in the state volume, like install.sh does.
+    MUSEGADGET_SDK_TOKEN: ${MUSEGADGET_SDK_TOKEN:-}
+    # Optional HTTP CONNECT proxy (the only kind the SDK supports).
+    https_proxy: ${https_proxy:-}
+    http_proxy: ${http_proxy:-}
+    no_proxy: ${no_proxy:-}
+  volumes:
+    - gadget-state:/var/lib/musegadget
+    - gadget-run:/run/musegadget
+    # Custom command definitions (*.json). This is a source dir only —
+    # the entrypoint syncs it into a root-owned dir the service trusts.
+    - ./commands.d:/mnt/commands.d:ro
+
+services:
+  # ------------------------------------------------------------ Runtime
+  # Pair once, run headless. No Bluetooth, no D-Bus, no host network, no
+  # extra capabilities: just the state volume and outbound HTTPS (443).
+  gadget:
+    <<: *common
+    container_name: muse-gadget
+    # The gadget's display name in Muse is the container hostname.
+    # Uncomment and set this to rename it (default: the container ID);
+    # the node id (homelink-XXXXXX) is unaffected. Recreate to apply.
+    # hostname: muse-gadget
+    restart: unless-stopped
+    # Lets Muse's commands reach a Home Assistant (or anything else)
+    # running on the Docker host itself, as host.docker.internal.
+    # LAN hosts are reachable through the bridge NAT without this.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # ------------------------------------------------------------ Pairing
+  # Throwaway. Shares the HOST's BlueZ through the host's system D-Bus:
+  #   * /var/run/dbus is the host's system bus socket directory, where
+  #     bluetoothd publishes org.bluez. The SDK's ble_server talks to it
+  #     with dbus.SystemBus() (DBUS_SYSTEM_BUS_ADDRESS points at it).
+  #   * network_mode: host puts the pairing container in the same network
+  #     environment the bare-metal installer would see (the setup flow
+  #     probes the current connection and calls the Muse API).
+  # The host must be prepared first: host/setup-bluez.sh (ExchangeMTU=256,
+  # battery plugin off, bluetoothd running).
+  pair:
+    <<: *common
+    profiles: ["pair"]
+    container_name: muse-gadget-pair
+    network_mode: host
+    stdin_open: true
+    tty: true
+    environment:
+      MUSEGADGET_RUN_AS: gadget
+      MUSEGADGET_SDK_TOKEN: ${MUSEGADGET_SDK_TOKEN:-}
+      https_proxy: ${https_proxy:-}
+      http_proxy: ${http_proxy:-}
+      no_proxy: ${no_proxy:-}
+      DBUS_SYSTEM_BUS_ADDRESS: unix:path=/var/run/dbus/system_bus_socket
+    volumes:
+      - gadget-state:/var/lib/musegadget
+      - gadget-run:/run/musegadget
+      - ./commands.d:/mnt/commands.d:ro
+      - /var/run/dbus:/var/run/dbus
+    command: ["pair"]
+
+volumes:
+  gadget-state: # identity.json, pairing.json, sdk_token — back this up
+  gadget-run:   # musegadget.sock — share with bridge sidecars (see README)

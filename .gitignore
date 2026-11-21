@@ -1,0 +1,10 @@
+# Secrets — the real .env carries the SDK token; never commit it.
+.env
+
+# Gadget state backups (identity.json / pairing.json / sdk_token)
+gadget-state*.tgz
+*.tgz
+
+# OS / editor noise
+.DS_Store
+*~
