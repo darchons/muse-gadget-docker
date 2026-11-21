@@ -1,0 +1,73 @@
+# Build the gadget image and publish it to the GitHub Container Registry
+# (ghcr.io/darchons/muse-gadget-docker).
+#
+#   push to main     -> :latest + :main + :<short-sha>
+#   push of a v* tag -> :<version> + :latest
+#   pull request     -> build only, nothing is published
+#   manual dispatch  -> same as a push to main
+#
+# The image contains no SDK token, identity, or pairing (the Dockerfile
+# runs install.sh tokenless and scrubs the state files in the same
+# layer), so publishing it is safe. Publishing uses the workflow's
+# built-in GITHUB_TOKEN — no stored credentials.
+
+name: Docker
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU (for the arm64 build)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          # latest=true, not auto: with auto, none of the first six
+          # published builds actually received a latest tag.
+          flavor: |
+            latest=true
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=sha
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

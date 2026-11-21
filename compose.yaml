@@ -17,7 +17,10 @@ x-common: &common
     args:
       # Pin to a commit SHA for reproducible builds.
       SDK_REF: ${SDK_REF:-main}
-  image: muse-gadget:local
+  # Default: the locally built image. Set GADGET_IMAGE in .env to the
+  # prebuilt GHCR image (ghcr.io/darchons/muse-gadget-docker:latest) to
+  # pull instead of building — see README, "Use the prebuilt image".
+  image: ${GADGET_IMAGE:-muse-gadget:local}
   environment:
     MUSEGADGET_RUN_AS: gadget
     # From .env (see .env.example). Written by the entrypoint to the

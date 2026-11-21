@@ -23,6 +23,86 @@ This mirrors the SDK's own headless deployment notes (pairing is bound to
 which is also what makes this deployable on hosts with no Bluetooth at
 all: pair on any BLE host, move the volume, run anywhere.
 
+## Quick Start
+
+No clone needed — these run straight off the published GHCR image.
+Substitute your SDK token from gadgets.muse.ai for `mgst_…` in the
+commands below.
+
+### Pairing
+
+One-time, on the host that has the Bluetooth adapter.
+
+Apply the two bluetoothd settings pairing needs (`ExchangeMTU =
+256`, battery plugin off) and verify the adapter — this fetches and
+runs this repo's host setup script:
+
+```sh
+wget -qO- \
+  https://raw.githubusercontent.com/darchons/muse-gadget-docker/main/host/setup-bluez.sh \
+  | sudo bash
+```
+
+Create the device identity, and note the `MuseGadgetXXXXXX` name it
+prints — that is the name to pick in the Muse app:
+
+```sh
+docker run --rm \
+  -v muse-gadget-state:/var/lib/musegadget \
+  ghcr.io/darchons/muse-gadget-docker:latest info
+```
+
+Open the 10-minute pairing window (host network + the host's system
+D-Bus, so the container can use the host's BlueZ):
+
+```sh
+docker run --rm -it \
+  --network host \
+  -v /var/run/dbus:/var/run/dbus \
+  -v muse-gadget-state:/var/lib/musegadget \
+  -e MUSEGADGET_SDK_TOKEN=mgst_… \
+  ghcr.io/darchons/muse-gadget-docker:latest pair
+```
+
+While the window is open, in the Muse app: **Settings → Devices →
+Developer mode** on, then **Add Device**, pick `MuseGadgetXXXXXX`,
+accept the community-device warning, and when asked for Wi-Fi pick
+the network shown (the "device" is already online; no password is
+needed). Success looks like `Paired.` in the container output, and
+the `info` command above then reports `paired: yes`.
+
+Pair on a network you trust: community pairing has no manufacturer
+verification and cannot prevent an active man-in-the-middle attack.
+
+### Run
+
+Once paired, run the gadget headless — on the pairing host or any
+other host that has the `muse-gadget-state` volume:
+
+```sh
+docker run -d \
+  --name muse-gadget \
+  --hostname docker-gadget \
+  --restart unless-stopped \
+  --add-host host.docker.internal:host-gateway \
+  -v muse-gadget-state:/var/lib/musegadget \
+  -e MUSEGADGET_SDK_TOKEN=mgst_… \
+  ghcr.io/darchons/muse-gadget-docker:latest
+```
+
+The `--hostname docker-gadget` argument names the gadget: the name
+it shows in Muse is its container hostname, so it appears as
+`docker-gadget`. The node id (`homelink-XXXXXX`) is unaffected —
+change the hostname to rename the gadget, and recreate the
+container to apply it.
+
+All three commands share the `muse-gadget-state` Docker volume,
+which holds the identity, pairing, and token. Never run pairing and
+the gadget at the same time — one identity may only hold one live
+session. The compose-based flow in steps 1–4 below does the same
+thing from a clone of this repo, with the token kept in `.env`
+instead of on the command line.
+
 ## What Muse gets
 
 Commands run inside the container, as the unprivileged `gadget` account
@@ -70,6 +150,38 @@ the same layer that ran the installer, and fails the build if any of
 them survives. So the image contains no token, no identity, and no
 pairing — safe to push to a registry. The real identity is created in
 the state volume in step 3.
+
+### …or use the prebuilt image (GHCR)
+
+GitHub Actions builds this image on every push to `main` and publishes
+it to the GitHub Container Registry as
+`ghcr.io/darchons/muse-gadget-docker` — multi-arch (`linux/amd64`,
+`linux/arm64`), tagged `latest`, `main`, the short commit SHA, and the
+version on `v*` tags. Because the image contains no token, identity, or
+pairing (above), it is safe to pull from anywhere.
+
+To use it instead of building:
+
+```sh
+# in .env — the token is still needed; it is a runtime input
+GADGET_IMAGE=ghcr.io/darchons/muse-gadget-docker:latest
+
+docker compose pull        # fetches the prebuilt image; skip `docker compose build`
+```
+
+Then continue with step 1 (host Bluetooth prep still applies — it is a
+host property, not an image property) and steps 3–4 as written; both
+the runtime and the pairing service use the pulled image.
+
+If the package is private, authenticate first with a GitHub token that
+has `read:packages`:
+
+```sh
+echo "$GH_TOKEN" | docker login ghcr.io -u <github-user> --password-stdin
+```
+
+(Making the package public under the repo's Packages settings removes
+that step — reasonable here, since the image carries no secrets.)
 
 ## 3. Create the identity, then pair
 
@@ -191,9 +303,11 @@ recreate the container.
 
 ## Updating
 
-Rebuild with a new `SDK_REF`, recreate the container. The state volume
-(and pairing) survives. Check the service log for recent `invoke` lines
-first — a restart interrupts any command Muse is currently running.
+Local builds: rebuild with a new `SDK_REF`, recreate the container.
+GHCR users: `docker compose pull`, then recreate. The state volume
+(and pairing) survives either way. Check the service log for recent
+`invoke` lines first — a restart interrupts any command Muse is
+currently running.
 
 ## Swarm / Komodo note
 
